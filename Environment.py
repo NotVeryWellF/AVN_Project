@@ -1,23 +1,32 @@
+import numpy as np
+import math
+import random
+
+from typing import Tuple
+
+
 class Vehicle:
     """ Base vehicle class """
-    def __init__(self, x: float, y: float, vel: float, goals: list):
-        assert vel >= 0, "Velocity must be greater or equal to 0"
-        self.x = x  # m
-        self.y = y  # m
-        self.vel = vel  # m/s
-        # List goals of velocities by pairs: (x_coord, goal_velocity), goals must be in ascending order by x_coord
-        self.goals = goals
-        self.curr_goal = self.find_curr_goal()  # current desired velocity
-        # Acceleration to reach the desired goal in time
-        self.acc = (self.curr_goal[1]**2 - self.vel**2)/(2*(self.curr_goal[0] - self.x))
 
-    def find_curr_goal(self):
-        # if there is a goal on the list, with x_coord > self.x -> current goal velocity = goal's velocity,
-        # in other cases goal velocity is 16 m/s
-        for goal in self.goals:
-            if self.x < goal[0]:
-                return goal
-        return 1000, 16
+    # x - start x position of the vehicle (meters)
+    # vel - start velocity of the vehicle (in positive x direction) (meters/second)
+    # goals - list of speed limits (x, v), where x - start of the limit, v - max speed
+    # T - time of the simulation (seconds), time_step - duration of one calculation step (seconds)
+    def __init__(self, x: float, vel: float, goals: list, T: int, time_step: float):
+        goals.append((10**6, 16))  # add final limit in the long distance
+        N = math.ceil(T/time_step)  # Number of steps
+        self.route = np.zeros((N,))  # Position of the vehicle in each point in time
+        curr_goal_index = 0  # Current speed limit
+        acc = (goals[curr_goal_index][1] ** 2 - vel ** 2) / (2 * (goals[curr_goal_index][0] - x))  # Start acceleration
+
+        # Calculate route of the vehicle (position in each point of time)
+        for i in range(N):
+            if x > goals[curr_goal_index][0]:  # If vehicle reached the speed limit, it looks at the next one
+                curr_goal_index += 1
+                acc = (goals[curr_goal_index][1] ** 2 - vel ** 2) / (2 * (goals[curr_goal_index][0] - x))
+            vel += acc*time_step
+            x += vel*time_step
+            self.route[i] = x
 
 
 class Sender(Vehicle):
@@ -31,52 +40,49 @@ class Receiver(Vehicle):
 
 
 class RSU:
-    """ RSU Agent that controls the actions in the environment """
+    """ RSU Agent that controls the offloading decisions"""
 
-    def __init__(self, x: float, y: float):
+    def __init__(self, x: float, y: float, radius: float):
         self.x = x
         self.y = y
-        self.radius = 250  # max radius of the connection
+        self.radius = radius  # max radius of the connection
 
 
 class Environment:
     """ Environment class """
 
-    def __init__(self, _RSU: RSU, _Receiver: Vehicle, _Sender: Vehicle, step_size: float):
+    def __init__(self, T: int, time_step: float, goal_number_range: Tuple[int, int],
+                 goal_speed_range: Tuple[float, float], max_start_pos: float):
         # RSU of the area
-        self._RSU = _RSU
+        rsu_x_pos = 500
+        rsu_y_pos = 5
+        rsu_radius = 500
+        self.rsu = RSU(rsu_x_pos, rsu_y_pos, rsu_radius)
+
+        # Goals
+        goals = self.generate_goals(goal_number_range, goal_speed_range, max_start_pos, rsu_radius*2)
 
         # Vehicle that can receive the offloading tasks
-        self._Receiver = _Receiver
+        receiver_pos = random.random()*max_start_pos
+        receiver_vel = random.uniform(goal_speed_range[0], goal_speed_range[1])
+        self.receiver = Receiver(receiver_pos, receiver_vel, goals, T, time_step)
 
         # Vehicle that can send the offloading task to either RSU or Receiver
-        self._Sender = _Sender
+        sender_pos = random.random() * max_start_pos
+        sender_vel = random.uniform(goal_speed_range[0], goal_speed_range[1])
+        self.sender = Sender(sender_pos, sender_vel, goals, T, time_step)
 
-        # Size of the step in seconds
-        self.step_size = step_size
+        # Environment information
+        self.T = T
+        self.time_step = time_step
+        self.delta_distance = np.abs(self.sender.route - self.receiver.route)
 
-    def renew_positions(self):
-        # Updates the positions of the vehicles
+    @staticmethod
+    def generate_goals(goal_number_range: Tuple[int, int], goal_speed_range: Tuple[float, float],
+                       max_start_pos: float, max_final_pos: float):
+        return [(x, random.uniform(goal_speed_range[0], goal_speed_range[1])) for x in
+                np.linspace(max_start_pos, max_final_pos, random.randint(goal_number_range[0], goal_number_range[1]))]
 
-        # Sender
-        if self._Sender.x > self._Sender.curr_goal[0]:
-            # find a new goal if old was passed
-            self._Sender.curr_goal = self._Sender.find_curr_goal()
-            # calculate the acceleration needed to reach the desired velocity in time
-            self._Sender.acc = (self._Sender.curr_goal[1] ** 2 - self._Sender.vel ** 2) / \
-                               (2 * (self._Sender.curr_goal[0] - self._Sender.x))
-        # increment velocity and position of teh vehicle
-        self._Sender.vel += self.step_size*self._Sender.acc
-        self._Sender.x += self.step_size*self._Sender.vel
 
-        # Receiver
-        if self._Receiver.x > self._Receiver.curr_goal[0]:
-            # find a new goal if old was passed
-            self._Receiver.curr_goal = self._Receiver.find_curr_goal()
-            # calculate the acceleration needed to reach the desired velocity in time
-            self._Receiver.acc = (self._Receiver.curr_goal[1] ** 2 - self._Receiver.vel ** 2) / \
-                               (2 * (self._Receiver.curr_goal[0] - self._Receiver.x))
-        # increment velocity and position of teh vehicle
-        self._Receiver.vel += self.step_size*self._Receiver.acc
-        self._Receiver.x += self.step_size*self._Receiver.vel
+
 
